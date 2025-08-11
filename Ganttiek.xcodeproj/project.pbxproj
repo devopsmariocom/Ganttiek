@@ -58,6 +58,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				ContentView.swift,
+				DependencyResolver.swift,
 				GanttChartView.swift,
 				GanttDocument.swift,
 				Item.swift,

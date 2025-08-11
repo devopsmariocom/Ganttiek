@@ -4,13 +4,17 @@ import SwiftUI
 struct GanttTask: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var name: String
-    var start: Date
-    var end: Date
+    var start: Date         // planned start
+    var end: Date           // planned end (duration = end-start)
     var color: ColorCodable = .init(.blue)
+
+    // Dependency (single predecessor FS + lag)
+    var predecessorId: UUID? = nil
+    var lagDays: Int = 0
 
     var clampedEnd: Date { max(start, end) }
     var durationDays: Int {
-        Calendar.current.dateComponents([.day], from: start, to: clampedEnd).day ?? 0
+        max(Calendar.current.dateComponents([.day], from: start, to: clampedEnd).day ?? 0, 0)
     }
 }
 
@@ -19,7 +23,15 @@ struct GanttProject: Codable {
     var tasks: [GanttTask]
 }
 
-// Cross-platform Color <-> Codable
+// Result of scheduling with dependencies
+struct ResolvedTask: Identifiable, Hashable {
+    let id: UUID
+    let task: GanttTask
+    let scheduledStart: Date
+    let scheduledEnd: Date
+}
+
+// SwiftUI Color <-> Codable (macOS+iOS)
 struct ColorCodable: Codable, Hashable {
     let r: Double, g: Double, b: Double, a: Double
 
@@ -39,9 +51,9 @@ struct ColorCodable: Codable, Hashable {
 
     var color: Color {
         #if os(macOS)
-        return Color(NSColor(deviceRed: r, green: g, blue: b, alpha: a))
+        Color(NSColor(deviceRed: r, green: g, blue: b, alpha: a))
         #else
-        return Color(UIColor(red: r, green: g, blue: b, alpha: a))
+        Color(UIColor(red: r, green: g, blue: b, alpha: a))
         #endif
     }
 }
