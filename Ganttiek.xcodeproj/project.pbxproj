@@ -50,8 +50,6 @@
 		AC4F81162E489DAD00161A23 /* Exceptions for "Ganttiek" folder in "Ganttiek" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				"Assets iOS.xcassets",
-				Ganttiek_iOSApp.swift,
 				Info.plist,
 			);
 			target = AC4F80F22E489DAC00161A23 /* Ganttiek */;
@@ -59,11 +57,9 @@
 		AC4F815D2E48AE1200161A23 /* Exceptions for "Ganttiek" folder in "Ganttiek iOS" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				"Assets iOS.xcassets",
 				ContentView.swift,
 				GanttChartView.swift,
 				GanttDocument.swift,
-				Ganttiek_iOSApp.swift,
 				Item.swift,
 				Models.swift,
 				SampleData.swift,
@@ -73,9 +69,7 @@
 		AC4F81672E48AFDE00161A23 /* Exceptions for "Ganttiek iOS" folder in "Ganttiek iOS" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				Assets.xcassets,
 				ContentView.swift,
-				Ganttiek_iOSApp.swift,
 				Item.swift,
 			);
 			target = AC4F812C2E48A2E800161A23 /* Ganttiek iOS */;
