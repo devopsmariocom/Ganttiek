@@ -1,30 +1,22 @@
 import SwiftUI
 
 struct ContentView: View {
-    // App name from bundle (used for titles/exports)
     private var appName: String {
         let n = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
         return n ?? "Ganttiek"
     }
 
-    // Project state
     @State private var project = GanttProject(title: "Ganttiek", tasks: sampleTasks())
 
-    // Add-task form state
-    @State private var newName: String = ""
-    @State private var newStart: Date = .now
-    @State private var newEnd: Date = Calendar.current.date(byAdding: .day, value: 3, to: .now) ?? .now
-    @State private var newColor: Color = .blue
-    @State private var newPredecessor: UUID? = nil
-    @State private var newLagDays: Int = 0
+    // Selection
+    @State private var selectedTaskId: UUID? = nil
 
-    // iOS-only helpers
+    // iOS importer helper
     #if os(iOS)
     @State private var isImporting = false
     #endif
-
-    // Resolve dependencies to scheduled bars
+    
     private var resolved: [ResolvedTask] {
         (try? DependencyResolver.resolve(project.tasks)) ?? project.tasks.map {
             ResolvedTask(id: $0.id, task: $0, scheduledStart: $0.start, scheduledEnd: $0.clampedEnd)
@@ -34,21 +26,35 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             Sidebar(tasks: $project.tasks,
+                    selectedTaskId: $selectedTaskId,
                     onExportJSON: exportJSON,
                     onImportJSON: importJSON,
                     onExportPNG: exportPNG)
-            .frame(minWidth: 280)
+            .frame(minWidth: 320)
 
-            VStack {
-                GanttChartView(items: resolved)
-                    .padding()
+            // Chart + Inspector
+            VStack(spacing: 0) {
+                GanttChartView(
+                    items: resolved,
+                    selectedId: selectedTaskId,
+                    onSelect: { selectedTaskId = $0 },
+                    onMove: moveTask(id:deltaDays:),
+                    onResize: resizeTask(id:edge:deltaDays:),
+                    onClearDependency: clearDependency(of:),
+                    onSetDependencyFromSelected: setDependencyFromSelected(toPredecessor:)
+                )
+                .padding()
                 Divider()
-                addTaskForm
-                    .padding()
+                InspectorView(
+                    project: $project,
+                    selectedTaskId: $selectedTaskId,
+                    onClearDependency: clearDependency(of:)
+                )
+                .padding()
             }
             .navigationTitle(project.title.isEmpty ? appName : project.title)
         }
-        .frame(minWidth: 980, minHeight: 620)
+        .frame(minWidth: 1100, minHeight: 680)
         #if os(iOS)
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
             if case let .success(url) = result,
@@ -60,45 +66,46 @@ struct ContentView: View {
         #endif
     }
 
-    // MARK: - Add task form
-    var addTaskForm: some View {
-        HStack(spacing: 12) {
-            TextField("Task name", text: $newName)
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 200)
+    // MARK: - Mutations
+    private func indexOf(_ id: UUID) -> Int? {
+        project.tasks.firstIndex(where: { $0.id == id })
+    }
 
-            DatePicker("Start", selection: $newStart, displayedComponents: .date)
-            DatePicker("End", selection: $newEnd, displayedComponents: .date)
+    private func moveTask(id: UUID, deltaDays: Int) {
+        guard let i = indexOf(id), deltaDays != 0 else { return }
+        let cal = Calendar.current
+        project.tasks[i].start = cal.date(byAdding: .day, value: deltaDays, to: project.tasks[i].start) ?? project.tasks[i].start
+        project.tasks[i].end   = cal.date(byAdding: .day, value: deltaDays, to: project.tasks[i].end)   ?? project.tasks[i].end
+    }
 
-            ColorPicker("Color", selection: $newColor)
-
-            Picker("Depends on", selection: $newPredecessor) {
-                Text("None").tag(UUID?.none)
-                ForEach(project.tasks) { t in
-                    Text(t.name).tag(UUID?.some(t.id))
-                }
-            }
-            .frame(minWidth: 160)
-
-            Stepper("Lag \(newLagDays)d", value: $newLagDays, in: 0...60)
-
-            Button("Add") {
-                guard !newName.isEmpty, newEnd >= newStart else { return }
-                project.tasks.append(.init(
-                    name: newName,
-                    start: newStart,
-                    end: newEnd,
-                    color: .init(newColor),
-                    predecessorId: newPredecessor,
-                    lagDays: newLagDays
-                ))
-                newName = ""; newLagDays = 0; newPredecessor = nil
-            }
-            .keyboardShortcut(.return, modifiers: [])
+    private func resizeTask(id: UUID, edge: ResizeEdge, deltaDays: Int) {
+        guard let i = indexOf(id), deltaDays != 0 else { return }
+        let cal = Calendar.current
+        switch edge {
+        case .start:
+            let newStart = cal.date(byAdding: .day, value: deltaDays, to: project.tasks[i].start) ?? project.tasks[i].start
+            // clamp to not after end
+            project.tasks[i].start = min(newStart, project.tasks[i].end)
+        case .end:
+            let newEnd = cal.date(byAdding: .day, value: deltaDays, to: project.tasks[i].end) ?? project.tasks[i].end
+            project.tasks[i].end = max(newEnd, project.tasks[i].start.addingTimeInterval(24*3600)) // min 1 den
         }
     }
 
-    // MARK: - Import / Export JSON
+    private func clearDependency(of id: UUID) {
+        guard let i = indexOf(id) else { return }
+        project.tasks[i].predecessorId = nil
+        project.tasks[i].lagDays = 0
+    }
+
+    /// Set "selected task" to depend on `predecessorId`
+    private func setDependencyFromSelected(toPredecessor predecessorId: UUID) {
+        guard let sel = selectedTaskId, let i = indexOf(sel), sel != predecessorId else { return }
+        project.tasks[i].predecessorId = predecessorId
+        // ponecháme existující lagDays
+    }
+
+    // MARK: - Import / Export JSON (same as before)
     func exportJSON() {
         do {
             let data = try JSONEncoder().encode(project)
@@ -112,9 +119,7 @@ struct ContentView: View {
             try? data.write(to: tmp)
             presentShare(url: tmp)
             #endif
-        } catch {
-            print("Export JSON error:", error)
-        }
+        } catch { print("Export JSON error:", error) }
     }
 
     func importJSON() {
@@ -134,7 +139,6 @@ struct ContentView: View {
         #endif
     }
 
-    // MARK: - Export PNG snapshot
     func exportPNG() {
         #if os(macOS)
         guard let window = NSApp.keyWindow, let contentView = window.contentView else { return }
@@ -169,14 +173,15 @@ struct ContentView: View {
     #endif
 }
 
-// MARK: - Sidebar (shared)
+// MARK: - Sidebar with selection + quick add
 private struct Sidebar: View {
     @Binding var tasks: [GanttTask]
+    @Binding var selectedTaskId: UUID?
     var onExportJSON: () -> Void
     var onImportJSON: () -> Void
     var onExportPNG: () -> Void
 
-    @State private var selection: UUID?
+    @State private var draftName = ""
 
     var body: some View {
         VStack(spacing: 8) {
@@ -184,30 +189,56 @@ private struct Sidebar: View {
                 Text("Tasks").font(.headline)
                 Spacer()
                 Button { onImportJSON() } label: { Image(systemName: "square.and.arrow.down.on.square") }
-                    .help("Import project (JSON)")
                 Button { onExportJSON() } label: { Image(systemName: "square.and.arrow.up") }
-                    .help("Export project (JSON)")
             }
 
-            List(selection: $selection) {
+            List(selection: $selectedTaskId) {
                 ForEach(tasks) { t in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(t.name).font(.system(size: 13, weight: .medium))
-                        Text(dateRange(t.start, t.clampedEnd)).font(.system(size: 11)).foregroundColor(.secondary)
+                    HStack {
+                        Circle().fill(t.color.color).frame(width: 10, height: 10)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(t.name).font(.system(size: 13, weight: .medium))
+                            Text(dateRange(t.start, t.clampedEnd)).font(.system(size: 11)).foregroundColor(.secondary)
+                        }
                     }
                     .tag(t.id)
+                    .contextMenu {
+                        Button("Remove dependency") {
+                            if let i = tasks.firstIndex(where: {$0.id == t.id}) {
+                                tasks[i].predecessorId = nil; tasks[i].lagDays = 0
+                            }
+                        }
+                    }
                 }
-                .onDelete { idx in tasks.remove(atOffsets: idx) }
+                .onDelete { idx in
+                    let ids = idx.map { tasks[$0].id }
+                    tasks.remove(atOffsets: idx)
+                    if let sel = selectedTaskId, ids.contains(sel) { selectedTaskId = nil }
+                }
             }
             .listStyle(.inset)
 
             HStack {
+                TextField("New task…", text: $draftName)
+                    .textFieldStyle(.roundedBorder)
+                Button("Add") {
+                    guard !draftName.isEmpty else { return }
+                    let now = Calendar.current.startOfDay(for: Date())
+                    let t = GanttTask(name: draftName,
+                                      start: now, end: Calendar.current.date(byAdding: .day, value: 3, to: now)!,
+                                      color: .init(.blue))
+                    tasks.append(t)
+                    draftName = ""; selectedTaskId = t.id
+                }
+            }
+            HStack {
                 Button(role: .destructive) {
-                    if let sel = selection, let i = tasks.firstIndex(where: { $0.id == sel }) {
-                        tasks.remove(at: i); selection = nil
+                    if let sel = selectedTaskId,
+                       let i = tasks.firstIndex(where: { $0.id == sel }) {
+                        tasks.remove(at: i); selectedTaskId = nil
                     }
                 } label: { Label("Delete", systemImage: "trash") }
-                .disabled(selection == nil)
+                .disabled(selectedTaskId == nil)
 
                 Spacer()
                 Button { onExportPNG() } label: { Label("Export PNG", systemImage: "photo.on.rectangle.angled") }
@@ -219,5 +250,51 @@ private struct Sidebar: View {
     private func dateRange(_ s: Date, _ e: Date) -> String {
         let df = DateFormatter(); df.dateStyle = .short
         return "\(df.string(from: s)) – \(df.string(from: e))"
+    }
+}
+
+// MARK: - Inspector (manual edits)
+private struct InspectorView: View {
+    @Binding var project: GanttProject
+    @Binding var selectedTaskId: UUID?
+    var onClearDependency: (UUID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Inspector").font(.headline)
+            if let id = selectedTaskId,
+               let idx = project.tasks.firstIndex(where: {$0.id == id}) {
+                let binding = $project.tasks[idx]
+                TextField("Name", text: binding.name)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    DatePicker("Start", selection: binding.start, displayedComponents: .date)
+                    DatePicker("End", selection: binding.end, displayedComponents: .date)
+                }
+                ColorPicker("Color", selection: Binding(
+                    get: { binding.wrappedValue.color.color },
+                    set: { binding.wrappedValue.color = .init($0) }
+                ))
+
+                // Dependency
+                Picker("Depends on", selection: Binding(
+                    get: { binding.wrappedValue.predecessorId },
+                    set: { binding.wrappedValue.predecessorId = $0 }
+                )) {
+                    Text("None").tag(UUID?.none)
+                    ForEach(project.tasks.filter { $0.id != id }) { t in
+                        Text(t.name).tag(UUID?.some(t.id))
+                    }
+                }
+                HStack {
+                    Stepper("Lag \(binding.lagDays.wrappedValue)d", value: binding.lagDays, in: 0...60)
+                    Spacer()
+                    Button("Remove dependency") { onClearDependency(id) }
+                        .disabled(binding.predecessorId.wrappedValue == nil)
+                }
+            } else {
+                Text("Select a task to edit").foregroundColor(.secondary)
+            }
+        }
     }
 }

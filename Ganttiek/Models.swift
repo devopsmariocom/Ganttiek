@@ -1,6 +1,12 @@
 import Foundation
 import SwiftUI
 
+// Models.swift (top, after imports)
+enum ResizeEdge {
+    case start
+    case end
+}
+
 struct GanttTask: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var name: String
