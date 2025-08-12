@@ -1,6 +1,16 @@
+
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct ContentView: View {
+    @State private var isExportingPNG = false
+    @State private var exportDoc = PNGDocument(data: Data())   // <-- non-optional
+    @State private var exportError: String? = nil
+    @State private var showShare = false
+    @State private var shareItems: [Any] = []
+    
     private var appName: String {
         let n = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
@@ -55,6 +65,11 @@ struct ContentView: View {
             .navigationTitle(project.title.isEmpty ? appName : project.title)
         }
         .frame(minWidth: 1100, minHeight: 680)
+        #if os(iOS)
+        .overlay(ActivityPresenter(show: $showShare, items: shareItems))
+        #else
+        .overlay(SharePresenter(show: $showShare, items: shareItems))
+        #endif
         #if os(iOS)
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
             if case let .success(url) = result,
@@ -139,30 +154,74 @@ struct ContentView: View {
         #endif
     }
 
-    func exportPNG() {
+    /// Pure function used by tests to render the chart into PNG data.
+    /// Runs on main actor because it touches UI objects.
+    @MainActor
+    static func renderChartPNG(items: [ResolvedTask], size: CGSize) -> Data? {
+        let chart = GanttChartView(
+            items: items,
+            selectedId: nil,
+            onSelect: { _ in }, onMove: {_,_ in}, onResize: {_,_,_ in},
+            onClearDependency: { _ in }, onSetDependencyFromSelected: { _ in }
+        )
+        .frame(width: size.width, height: size.height)
+        .padding()
+
         #if os(macOS)
-        guard let window = NSApp.keyWindow, let contentView = window.contentView else { return }
-        let bounds = contentView.bounds
-        guard let rep = contentView.bitmapImageRepForCachingDisplay(in: bounds) else { return }
-        contentView.cacheDisplay(in: bounds, to: rep)
-        if let tiff = rep.tiffRepresentation,
-           let data = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = (project.title.isEmpty ? appName : project.title) + ".png"
-            if panel.runModal() == .OK, let url = panel.url { try? data.write(to: url) }
+        // Off-screen window snapshot (robust for tests too)
+        let host = NSHostingView(rootView: chart)
+        host.frame = CGRect(origin: .zero, size: size)
+        let win = NSWindow(contentRect: host.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.contentView = host
+        win.orderOut(nil)
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            win.contentView = nil; win.close(); return nil
         }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let data = rep.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }
+        win.contentView = nil
+        win.close()
+        return data
         #else
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let window = scene.windows.first else { return }
-        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
-        let image = renderer.image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
-        if let data = image.pngData() {
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent((project.title.isEmpty ? appName : project.title) + ".png")
-            try? data.write(to: tmp)
-            presentShare(url: tmp)
+        if #available(iOS 16.0, *) {
+            let r = ImageRenderer(content: chart); r.scale = 2
+            return r.uiImage?.pngData()
+        } else {
+            let vc = UIHostingController(rootView: chart)
+            vc.view.bounds = CGRect(origin: .zero, size: size)
+            vc.view.backgroundColor = .clear
+            let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 2
+            let img = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+                vc.view.drawHierarchy(in: vc.view.bounds, afterScreenUpdates: true)
+            }
+            return img.pngData()
         }
         #endif
+    }
+
+    @MainActor
+    func exportPNG() {
+        let exportSize = CGSize(width: 1600, height: 900)
+        guard let data = ContentView.renderChartPNG(items: resolved, size: exportSize) else {
+            exportError = "Failed to render PNG data"; return
+        }
+#if os(macOS)
+        if let img = NSImage(data: data) {
+            shareItems = [img]
+        } else {
+            shareItems = [data]
+        }
+        showShare = true
+#else
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent((project.title.isEmpty ? appName : project.title) + ".png")
+        try? data.write(to: tmp)
+        shareItems = [tmp]
+        showShare = true
+#endif
     }
 
     #if os(iOS)
@@ -298,3 +357,40 @@ private struct InspectorView: View {
         }
     }
 }
+
+#if os(iOS)
+private extension UIWindowScene {
+    var keyWindow: UIWindow? {
+        windows.first { $0.isKeyWindow }
+    }
+}
+#endif
+
+#if os(iOS)
+import UIKit
+struct ActivityPresenter: UIViewControllerRepresentable {
+    @Binding var show: Bool
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIViewController { UIViewController() }
+    func updateUIViewController(_ vc: UIViewController, context: Context) {
+        if show && vc.presentedViewController == nil {
+            let av = UIActivityViewController(activityItems: items, applicationActivities: nil)
+            vc.present(av, animated: true)
+            DispatchQueue.main.async { self.show = false }
+        }
+    }
+}
+#elseif os(macOS)
+struct SharePresenter: NSViewRepresentable {
+    @Binding var show: Bool
+    let items: [Any]
+    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+    func updateNSView(_ view: NSView, context: Context) {
+        if show {
+            let picker = NSSharingServicePicker(items: items)
+            picker.show(relativeTo: .zero, of: view, preferredEdge: .minY)
+            DispatchQueue.main.async { self.show = false }
+        }
+    }
+}
+#endif

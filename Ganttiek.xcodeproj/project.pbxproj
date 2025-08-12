@@ -63,6 +63,7 @@
 				GanttDocument.swift,
 				Item.swift,
 				Models.swift,
+				PNGDocument.swift,
 				SampleData.swift,
 			);
 			target = AC4F812C2E48A2E800161A23 /* Ganttiek iOS */;
