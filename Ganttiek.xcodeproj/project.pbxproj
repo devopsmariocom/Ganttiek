@@ -57,6 +57,7 @@
 		AC4F815D2E48AE1200161A23 /* Exceptions for "Ganttiek" folder in "Ganttiek iOS" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				ChecklistParser.swift,
 				ContentView.swift,
 				DependencyResolver.swift,
 				GanttChartView.swift,

@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var exportError: String? = nil
     @State private var showShare = false
     @State private var shareItems: [Any] = []
+    @State private var pasteError: String? = nil
     
     private var appName: String {
         let n = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
@@ -39,7 +40,8 @@ struct ContentView: View {
                     selectedTaskId: $selectedTaskId,
                     onExportJSON: exportJSON,
                     onImportJSON: importJSON,
-                    onExportPNG: exportPNG)
+                    onExportPNG: exportPNG,
+                    onPasteFromClipboard: importFromClipboardIndentedChecklist)
             .frame(minWidth: 320)
 
             // Chart + Inspector
@@ -79,6 +81,14 @@ struct ContentView: View {
             }
         }
         #endif
+        .alert("Paste failed", isPresented: Binding(
+            get: { pasteError != nil },
+            set: { _ in pasteError = nil }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(pasteError ?? "")
+        }
     }
 
     // MARK: - Mutations
@@ -152,6 +162,22 @@ struct ContentView: View {
         #else
         isImporting = true
         #endif
+    }
+
+    // MARK: - Paste from Clipboard (Indented Checklist)
+    @MainActor
+    func importFromClipboardIndentedChecklist() {
+        #if os(macOS)
+        guard let text = NSPasteboard.general.string(forType: .string) else {
+            pasteError = "Clipboard is empty or not text."; return
+        }
+        #else
+        guard let text = UIPasteboard.general.string else {
+            pasteError = "Clipboard is empty or not text."; return
+        }
+        #endif
+        let parsed = ChecklistParser.parseIndentedChecklist(text)
+        self.project = parsed
     }
 
     /// Pure function used by tests to render the chart into PNG data.
@@ -239,6 +265,7 @@ private struct Sidebar: View {
     var onExportJSON: () -> Void
     var onImportJSON: () -> Void
     var onExportPNG: () -> Void
+    var onPasteFromClipboard: () -> Void
 
     @State private var draftName = ""
 
@@ -248,6 +275,8 @@ private struct Sidebar: View {
                 Text("Tasks").font(.headline)
                 Spacer()
                 Button { onImportJSON() } label: { Image(systemName: "square.and.arrow.down.on.square") }
+                Button { onPasteFromClipboard() } label: { Image(systemName: "doc.on.clipboard") }
+                    .help("Paste from clipboard")
                 Button { onExportPNG() } label: { Image(systemName: "square.and.arrow.up") }
                     .help("Share PNG")
             }
@@ -365,6 +394,52 @@ private extension UIWindowScene {
     }
 }
 #endif
+
+struct ChecklistParser {
+    static func parseIndentedChecklist(_ text: String) -> GanttProject {
+        var tasks: [GanttTask] = []
+        var lastAtLevel: [Int: UUID] = [:]
+        let lines = text.components(separatedBy: .newlines)
+
+        let now = Date()
+        var currentStart = now
+
+        for raw in lines {
+            let line = raw.replacingOccurrences(of: "\t", with: "    ") // tabs → 4 spaces
+            guard let range = line.range(of: "- [ ]") else { continue }
+
+            let indent = line.distance(from: line.startIndex, to: range.lowerBound)
+            let level = indent / 4 // 4 spaces per level
+
+            let name = line[range.upperBound...].trimmingCharacters(in: .whitespaces)
+
+            let id = UUID()
+            var predecessorId: UUID? = nil
+            if let pred = lastAtLevel[level - 1] {
+                predecessorId = pred
+            }
+
+            // Dummy duration: 1 day
+            let end = Calendar.current.date(byAdding: .day, value: 1, to: currentStart) ?? currentStart
+
+            tasks.append(GanttTask(
+                id: id,
+                name: name,
+                start: currentStart,
+                end: end,
+                color: .init(.blue),
+                predecessorId: predecessorId,
+                lagDays: 0
+            ))
+
+            lastAtLevel[level] = id
+            currentStart = end
+        }
+
+        return GanttProject(title: "Imported Checklist", tasks: tasks)
+    }
+}
+
 
 #if os(iOS)
 import UIKit
