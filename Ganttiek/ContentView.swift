@@ -422,12 +422,15 @@ struct ChecklistParser {
             // Dummy duration: 1 day
             let end = Calendar.current.date(byAdding: .day, value: 1, to: currentStart) ?? currentStart
 
+            // Generate a random color for each task
+            let randomColor = Color(hue: Double.random(in: 0...1), saturation: 0.7, brightness: 0.9)
+
             tasks.append(GanttTask(
                 id: id,
                 name: name,
                 start: currentStart,
                 end: end,
-                color: .init(.blue),
+                color: .init(randomColor),
                 predecessorId: predecessorId,
                 lagDays: 0
             ))
