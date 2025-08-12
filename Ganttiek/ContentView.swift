@@ -248,7 +248,8 @@ private struct Sidebar: View {
                 Text("Tasks").font(.headline)
                 Spacer()
                 Button { onImportJSON() } label: { Image(systemName: "square.and.arrow.down.on.square") }
-                Button { onExportJSON() } label: { Image(systemName: "square.and.arrow.up") }
+                Button { onExportPNG() } label: { Image(systemName: "square.and.arrow.up") }
+                    .help("Share PNG")
             }
 
             List(selection: $selectedTaskId) {
@@ -300,7 +301,6 @@ private struct Sidebar: View {
                 .disabled(selectedTaskId == nil)
 
                 Spacer()
-                Button { onExportPNG() } label: { Label("Export PNG", systemImage: "photo.on.rectangle.angled") }
             }
         }
         .padding()
