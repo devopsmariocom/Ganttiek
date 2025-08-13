@@ -1,6 +1,7 @@
 {
   "images" : [
     {
+      "filename" : "logo-macOS-Dark-512x512@2x.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -12,6 +13,7 @@
           "value" : "dark"
         }
       ],
+      "filename" : "logo-macOS-Dark-512x512@2x 1.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -23,6 +25,7 @@
           "value" : "tinted"
         }
       ],
+      "filename" : "logo-macOS-Dark-512x512@2x 2.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -58,21 +61,25 @@
       "size" : "128x128"
     },
     {
+      "filename" : "logo-macOS-Dark-512x512@2x 6.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "256x256"
     },
     {
+      "filename" : "logo-macOS-Dark-512x512@2x 5.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "256x256"
     },
     {
+      "filename" : "logo-macOS-Dark-512x512@2x 3.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "512x512"
     },
     {
+      "filename" : "logo-macOS-Dark-512x512@2x 4.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "512x512"
