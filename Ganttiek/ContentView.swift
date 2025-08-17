@@ -27,7 +27,54 @@ struct ContentView: View {
     #if os(iOS)
     @State private var isImporting = false
     #endif
-    
+
+    // MARK: - Time granularity: quarter-day (6 hours)
+    private let quarterHours: Int = 6
+    private let minTaskDuration: TimeInterval = 6 * 3600 // 1 quarter-day
+
+    private func roundDownToQuarter(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month, .day, .hour], from: date)
+        let hour = comps.hour ?? 0
+        let flooredHour = (hour / quarterHours) * quarterHours
+        return cal.date(bySettingHour: flooredHour, minute: 0, second: 0, of: date) ?? date
+    }
+
+    private func roundUpToQuarter(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let down = roundDownToQuarter(date)
+        if down == date { return down }
+        return cal.date(byAdding: .hour, value: quarterHours, to: down) ?? date
+    }
+
+    private func addQuarterHours(_ date: Date, quarters: Int) -> Date {
+        Calendar.current.date(byAdding: .hour, value: quarterHours * quarters, to: date) ?? date
+    }
+
+    /// Shift a task and all of its dependent successors by `delta` seconds.
+    private func shiftTaskAndSuccessors(from startId: UUID, delta: TimeInterval) {
+        guard delta != 0 else { return }
+        // Build quick lookups
+        var idToIndex: [UUID: Int] = [:]
+        for (i, t) in project.tasks.enumerated() { idToIndex[t.id] = i }
+
+        var visited: Set<UUID> = []
+        var queue: [UUID] = [startId]
+        while let current = queue.first {
+            queue.removeFirst()
+            if visited.contains(current) { continue }
+            visited.insert(current)
+            if let idx = idToIndex[current] {
+                project.tasks[idx].start = project.tasks[idx].start.addingTimeInterval(delta)
+                project.tasks[idx].end   = project.tasks[idx].end.addingTimeInterval(delta)
+            }
+            // Enqueue direct successors
+            for t in project.tasks where t.predecessorId == current {
+                queue.append(t.id)
+            }
+        }
+    }
+
     private var resolved: [ResolvedTask] {
         (try? DependencyResolver.resolve(project.tasks)) ?? project.tasks.map {
             ResolvedTask(id: $0.id, task: $0, scheduledStart: $0.start, scheduledEnd: $0.clampedEnd)
@@ -98,9 +145,15 @@ struct ContentView: View {
 
     private func moveTask(id: UUID, deltaDays: Int) {
         guard let i = indexOf(id), deltaDays != 0 else { return }
+        // Interpret `deltaDays` as number of quarter-day steps (for drag/drop fine control)
         let cal = Calendar.current
-        project.tasks[i].start = cal.date(byAdding: .day, value: deltaDays, to: project.tasks[i].start) ?? project.tasks[i].start
-        project.tasks[i].end   = cal.date(byAdding: .day, value: deltaDays, to: project.tasks[i].end)   ?? project.tasks[i].end
+        let deltaHours = quarterHours * deltaDays
+        project.tasks[i].start = addQuarterHours(roundDownToQuarter(project.tasks[i].start), quarters: deltaDays)
+        project.tasks[i].end   = addQuarterHours(roundDownToQuarter(project.tasks[i].end),   quarters: deltaDays)
+        // Ensure min duration
+        if project.tasks[i].end.timeIntervalSince(project.tasks[i].start) < minTaskDuration {
+            project.tasks[i].end = cal.date(byAdding: .second, value: Int(minTaskDuration), to: project.tasks[i].start) ?? project.tasks[i].start.addingTimeInterval(minTaskDuration)
+        }
     }
 
     private func resizeTask(id: UUID, edge: ResizeEdge, deltaDays: Int) {
@@ -108,12 +161,17 @@ struct ContentView: View {
         let cal = Calendar.current
         switch edge {
         case .start:
-            let newStart = cal.date(byAdding: .day, value: deltaDays, to: project.tasks[i].start) ?? project.tasks[i].start
-            // clamp to not after end
-            project.tasks[i].start = min(newStart, project.tasks[i].end)
+            let proposed = addQuarterHours(roundDownToQuarter(project.tasks[i].start), quarters: deltaDays)
+            // clamp to not after end - min duration
+            let latestAllowed = project.tasks[i].end.addingTimeInterval(-minTaskDuration)
+            let clamped = min(proposed, latestAllowed)
+            project.tasks[i].start = roundDownToQuarter(clamped)
         case .end:
-            let newEnd = cal.date(byAdding: .day, value: deltaDays, to: project.tasks[i].end) ?? project.tasks[i].end
-            project.tasks[i].end = max(newEnd, project.tasks[i].start.addingTimeInterval(24*3600)) // min 1 den
+            let proposed = addQuarterHours(roundDownToQuarter(project.tasks[i].end), quarters: deltaDays)
+            // enforce minimum duration
+            let earliestAllowed = project.tasks[i].start.addingTimeInterval(minTaskDuration)
+            let clamped = max(proposed, earliestAllowed)
+            project.tasks[i].end = roundUpToQuarter(clamped)
         }
     }
 
@@ -127,7 +185,16 @@ struct ContentView: View {
     private func setDependencyFromSelected(toPredecessor predecessorId: UUID) {
         guard let sel = selectedTaskId, let i = indexOf(sel), sel != predecessorId else { return }
         project.tasks[i].predecessorId = predecessorId
-        // ponecháme existující lagDays
+        // Move selected task to start right after predecessor (next quarter boundary)
+        if let predIndex = indexOf(predecessorId) {
+            let oldStart = project.tasks[i].start
+            let newStart = roundUpToQuarter(project.tasks[predIndex].end)
+            let delta = newStart.timeIntervalSince(oldStart)
+            if delta != 0 {
+                shiftTaskAndSuccessors(from: project.tasks[i].id, delta: delta)
+            }
+        }
+        // preserve existing lagDays value
     }
 
     // MARK: - Import / Export JSON (same as before)
@@ -336,7 +403,9 @@ private struct Sidebar: View {
     }
 
     private func dateRange(_ s: Date, _ e: Date) -> String {
-        let df = DateFormatter(); df.dateStyle = .short
+        let df = DateFormatter();
+        df.dateStyle = .short
+        df.timeStyle = .short
         return "\(df.string(from: s)) – \(df.string(from: e))"
     }
 }
@@ -356,8 +425,8 @@ private struct InspectorView: View {
                 TextField("Name", text: binding.name)
                     .textFieldStyle(.roundedBorder)
                 HStack {
-                    DatePicker("Start", selection: binding.start, displayedComponents: .date)
-                    DatePicker("End", selection: binding.end, displayedComponents: .date)
+                    DatePicker("Start", selection: binding.start, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker("End", selection: binding.end, displayedComponents: [.date, .hourAndMinute])
                 }
                 ColorPicker("Color", selection: Binding(
                     get: { binding.wrappedValue.color.color },
@@ -402,7 +471,16 @@ struct ChecklistParser {
         let lines = text.components(separatedBy: .newlines)
 
         let now = Date()
-        var currentStart = now
+        // Start at the next quarter boundary from now
+        var currentStart = Calendar.current.startOfDay(for: now)
+        let cal = Calendar.current
+        func roundUp(_ d: Date) -> Date {
+            let hour = cal.component(.hour, from: d)
+            let floored = (hour / 6) * 6
+            let base = cal.date(bySettingHour: floored, minute: 0, second: 0, of: d) ?? d
+            return base == d ? base : cal.date(byAdding: .hour, value: 6, to: base) ?? d
+        }
+        currentStart = roundUp(currentStart)
 
         for raw in lines {
             let line = raw.replacingOccurrences(of: "\t", with: "    ") // tabs → 4 spaces
@@ -415,12 +493,10 @@ struct ChecklistParser {
 
             let id = UUID()
             var predecessorId: UUID? = nil
-            if let pred = lastAtLevel[level - 1] {
-                predecessorId = pred
-            }
+            if let pred = lastAtLevel[level - 1] { predecessorId = pred }
 
-            // Dummy duration: 1 day
-            let end = Calendar.current.date(byAdding: .day, value: 1, to: currentStart) ?? currentStart
+            // Quarter-day duration (6 hours)
+            let end = cal.date(byAdding: .hour, value: 6, to: currentStart) ?? currentStart
 
             // Generate a random color for each task
             let randomColor = Color(hue: Double.random(in: 0...1), saturation: 0.7, brightness: 0.9)
@@ -436,6 +512,7 @@ struct ChecklistParser {
             ))
 
             lastAtLevel[level] = id
+            // Next task starts right after this one, on a quarter boundary
             currentStart = end
         }
 
