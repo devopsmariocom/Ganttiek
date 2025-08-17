@@ -1,5 +1,26 @@
+
+
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
+
+
+#if os(macOS)
+extension View {
+    /// Cross-version cursor modifier using NSCursor.set() so we don't rely on SwiftUI's `.cursor` API.
+    func cursorCompat(_ cursor: NSCursor) -> some View {
+        self.onHover { inside in
+            if inside {
+                cursor.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+    }
+}
+#endif
 
 struct GanttChartView: View {
     var items: [ResolvedTask]
@@ -78,6 +99,7 @@ struct GanttChartView: View {
                         onSetAsPredecessorOfSelected: { onSetDependencyFromSelected(r.id) }
                     )
                     .frame(height: rowH)
+                    .zIndex(10)
                 }
                 Spacer(minLength: 0)
             }
@@ -85,7 +107,7 @@ struct GanttChartView: View {
 
             // Interactive overlays for dependency links (outside Canvas)
             dependencyOverlays(frames: frames)
-                .zIndex(20)
+                .zIndex(5)
         }
         // Enable drop anywhere over the chart using DropDelegate
         .onDrop(of: [UTType.text], delegate: ChartDropDelegate(
@@ -158,51 +180,8 @@ struct GanttChartView: View {
 
     @ViewBuilder
     private func dependencyOverlays(frames: [UUID: Frame]) -> some View {
-        ForEach(items) { r in
-            if let pred = r.task.predecessorId,
-               let from = frames[pred],
-               let to = frames[r.id] {
-
-                let startPt = CGPoint(x: from.x + from.w, y: from.yMid)
-                let endPt = CGPoint(x: to.x, y: to.yMid)
-                let midX = (startPt.x + endPt.x) / 2
-                let midY = (startPt.y + endPt.y) / 2
-
-                // Recreate the orthogonal path used in Canvas
-                let linkPath: Path = {
-                    var path = Path()
-                    path.move(to: startPt)
-                    path.addLine(to: CGPoint(x: midX, y: startPt.y))
-                    path.addLine(to: CGPoint(x: midX, y: endPt.y))
-                    path.addLine(to: endPt)
-                    return path
-                }()
-
-                // Invisible thick stroke for easy hit testing
-                linkPath
-                    .stroke(Color.clear, lineWidth: 14)
-                    .contentShape(linkPath)
-                    .onTapGesture { onClearDependency(r.id) }
-                    #if os(macOS)
-                    .onHover { isHovering in
-                        if isHovering { hoveredLinkId = r.id } else if hoveredLinkId == r.id { hoveredLinkId = nil }
-                    }
-                    #endif
-
-                // ❌ button when hovering (macOS)
-                #if os(macOS)
-                if hoveredLinkId == r.id {
-                    Button(action: { onClearDependency(r.id) }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12, weight: .bold))
-                    }
-                    .buttonStyle(.borderless)
-                    .position(x: midX, y: midY)
-                    .zIndex(21)
-                }
-                #endif
-            }
-        }
+        // Disabled interactive overlays to avoid blocking move/resize hovers
+        EmptyView()
     }
 
     // MARK: - Drop delegate for drag & drop move/resize
@@ -291,6 +270,12 @@ private struct InteractiveBar: View {
     var onClearDependency: () -> Void
     var onSetAsPredecessorOfSelected: () -> Void
 
+    #if os(macOS)
+    @State private var isMoving: Bool = false
+    @State private var isResizingStart: Bool = false
+    @State private var isResizingEnd: Bool = false
+    #endif
+
     @State private var moveStepsSent: Int = 0
     @State private var resizeStartStepsSent: Int = 0
     @State private var resizeEndStepsSent: Int = 0
@@ -314,10 +299,16 @@ private struct InteractiveBar: View {
                     .frame(width: w)
                     .overlay(stroke)
                     .offset(x: x)
+                    #if os(macOS)
+                    .cursorCompat(isMoving ? NSCursor.closedHand : NSCursor.openHand)
+                    #endif
                     .contentShape(Rectangle())
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { g in
+                                #if os(macOS)
+                                if !isMoving { isMoving = true }
+                                #endif
                                 let quartersFloat = (g.translation.width / pxPerDay) * 4.0
                                 let quarters = Int(quartersFloat.rounded(.towardZero))
                                 let inc = quarters - moveStepsSent
@@ -326,7 +317,12 @@ private struct InteractiveBar: View {
                                     moveStepsSent += inc
                                 }
                             }
-                            .onEnded { _ in moveStepsSent = 0 }
+                            .onEnded { _ in
+                                moveStepsSent = 0
+                                #if os(macOS)
+                                isMoving = false
+                                #endif
+                            }
                     )
                     .simultaneousGesture(
                         TapGesture().onEnded { onSelect(id) }
@@ -344,9 +340,15 @@ private struct InteractiveBar: View {
                     .fill(Color.black.opacity(0.0001)) // hit area
                     .frame(width: handleW, height: 28)
                     .offset(x: x)
+                    #if os(macOS)
+                    .cursorCompat(NSCursor.resizeLeftRight)
+                    #endif
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { g in
+                                #if os(macOS)
+                                if !isResizingStart { isResizingStart = true }
+                                #endif
                                 let quartersFloat = (g.translation.width / pxPerDay) * 4.0
                                 let quarters = Int(quartersFloat.rounded(.towardZero))
                                 let inc = quarters - resizeStartStepsSent
@@ -355,7 +357,12 @@ private struct InteractiveBar: View {
                                     resizeStartStepsSent += inc
                                 }
                             }
-                            .onEnded { _ in resizeStartStepsSent = 0 }
+                            .onEnded { _ in
+                                resizeStartStepsSent = 0
+                                #if os(macOS)
+                                isResizingStart = false
+                                #endif
+                            }
                     )
                     .onDrag {
                         NSItemProvider(object: NSString(string: "start:\(id.uuidString)"))
@@ -366,9 +373,15 @@ private struct InteractiveBar: View {
                     .fill(Color.black.opacity(0.0001))
                     .frame(width: handleW, height: 28)
                     .offset(x: x + w - handleW)
+                    #if os(macOS)
+                    .cursorCompat(NSCursor.resizeLeftRight)
+                    #endif
                     .highPriorityGesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { g in
+                                #if os(macOS)
+                                if !isResizingEnd { isResizingEnd = true }
+                                #endif
                                 let quartersFloat = (g.translation.width / pxPerDay) * 4.0
                                 let quarters = Int(quartersFloat.rounded(.towardZero))
                                 let inc = quarters - resizeEndStepsSent
@@ -377,7 +390,12 @@ private struct InteractiveBar: View {
                                     resizeEndStepsSent += inc
                                 }
                             }
-                            .onEnded { _ in resizeEndStepsSent = 0 }
+                            .onEnded { _ in
+                                resizeEndStepsSent = 0
+                                #if os(macOS)
+                                isResizingEnd = false
+                                #endif
+                            }
                     )
                     .onDrag {
                         NSItemProvider(object: NSString(string: "end:\(id.uuidString)"))
@@ -392,6 +410,10 @@ private struct InteractiveBar: View {
                     .padding(.horizontal, 8)
                     .offset(x: max(x + 2, 2))
             }
+#if os(macOS)
+            .cursorCompat(isMoving ? NSCursor.closedHand : NSCursor.openHand)
+#endif
+            .contentShape(Rectangle())
         }
     }
 }
